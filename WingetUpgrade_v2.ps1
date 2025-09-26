@@ -67,36 +67,31 @@ function New-UpgradeList
         [int[]]$ErrorLines = @()
     )
    
-    # Extract column positions from header
-    $idStart = $lines[$Header].IndexOf("Id")
-    $versionStart = $lines[$Header].IndexOf("Version")
-    $availableStart = $lines[$Header].IndexOf("Available")
-    $sourceStart = $lines[$Header].IndexOf("Source")
-  
-    # Process package information
-    $upgradeList = [System.Collections.ArrayList]::new()
-    
-    for ($i = $Header + 1; $i -le $Footer; $i++)
-    {
-        # Skip error lines
-        if ($ErrorLines -contains $i)
-        {
-            continue
-        }
+   # Process package information
+   $upgradeList = [System.Collections.ArrayList]::new()
+   $pattern = '^(.+?)\s{2,}([\S]+)\s+([\S]+)\s+([\S]+)\s+([\S]+)\s*$'
+   
+   for ($i = $Header + 1; $i -le $Footer; $i++)
+   {
+       # Skip error lines
+       if ($ErrorLines -contains $i)
+       {
+           continue
+       }
 
-        $line = $lines[$i]
+       $line = $lines[$i]
 
-        if ($line.Length -gt ($availableStart + 1) -and -not $line.StartsWith('-'))
-        {
-            $software = [Software]::new()
-            $software.Name = $line.Substring(0, $idStart).TrimEnd()
-            $software.Id = $line.Substring($idStart, $versionStart - $idStart).TrimEnd()
-            $software.Version = $line.Substring($versionStart, $availableStart - $versionStart).TrimEnd()
-            $software.AvailableVersion = $line.Substring($availableStart, $sourceStart - $availableStart).TrimEnd()
-            
-            [void]$upgradeList.Add($software)
-        }
-    }
+       if ($line -notlike '---*' -and $line -match $pattern)
+       {
+           $software = [Software]::new()
+           $software.Name = $matches[1].TrimEnd()
+           $software.Id = $matches[2].TrimEnd()
+           $software.Version = $matches[3].TrimEnd()
+           $software.AvailableVersion = $matches[4].TrimEnd()
+           
+           [void]$upgradeList.Add($software)
+       }
+   }
   
     return $upgradeList
 }
@@ -284,7 +279,7 @@ for ($i = 0; $i -lt $lines.Count; $i++)
         if ($DebugMode)
         {
             Write-Host "Standard upgrades available:" -ForegroundColor Cyan
-            $upgradeList1 | Format-Table
+            $upgradeList1 | Format-Table -AutoSize -Wrap
         }
     }
 
@@ -299,7 +294,7 @@ for ($i = 0; $i -lt $lines.Count; $i++)
         if ($DebugMode)
         {
             Write-Host "Explicit targeting upgrades available:" -ForegroundColor Cyan
-            $upgradeList2 | Format-Table
+            $upgradeList2 | Format-Table -AutoSize -Wrap
         }
     }
 
