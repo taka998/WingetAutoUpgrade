@@ -26,11 +26,10 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $false)]
-    [bool]$DebugMode = $false
+    [bool]$DebugMode = $true
 )
 
-class Software
-{
+class Software {
     [string]$Name
     [string]$Id
     [string]$Version
@@ -38,23 +37,19 @@ class Software
 }
 
 # Import SkipList
-try
-{
+try {
     $skipListPath = Join-Path -Path $PSScriptRoot -ChildPath "WingetUpgrade_SkipLists.json"
     $toSkip = Get-Content $skipListPath -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
     
-    if ($DebugMode)
-    {
+    if ($DebugMode) {
         Write-Host "Skip list loaded successfully from $skipListPath" -ForegroundColor Cyan
         Write-Host "Packages in skip list: $($toSkip.packages.Count)" -ForegroundColor Cyan
     }
-} catch
-{
+} catch {
     Write-Error "Failed to load skip list: $_" -ErrorAction Stop
 }
 
-function New-UpgradeList
-{
+function New-UpgradeList {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)]
@@ -67,37 +62,44 @@ function New-UpgradeList
         [int[]]$ErrorLines = @()
     )
    
-   # Process package information
-   $upgradeList = [System.Collections.ArrayList]::new()
-   $pattern = '^(.+?)\s{2,}([\S]+)\s+([\S]+)\s+([\S]+)\s+([\S]+)\s*$'
+    # Process package information
+    $upgradeList = [System.Collections.ArrayList]::new()
+    # Support both formats: with and without Source column
+    $pattern = '^(.+?)\s{2,}([\S]+)\s+([\S]+)\s+([\S]+)(?:\s+([\S]+))?\s*$'
    
-   for ($i = $Header + 1; $i -le $Footer; $i++)
-   {
-       # Skip error lines
-       if ($ErrorLines -contains $i)
-       {
-           continue
-       }
+    for ($i = $Header + 1; $i -le $Footer; $i++) {
+        # Skip error lines
+        if ($ErrorLines -contains $i) {
+            continue
+        }
 
-       $line = $lines[$i]
+        $line = $lines[$i]
+        
+        if ($DebugMode) {
+            Write-Host "Line $i`: $line" -ForegroundColor DarkGray
+        }
 
-       if ($line -notlike '---*' -and $line -match $pattern)
-       {
-           $software = [Software]::new()
-           $software.Name = $matches[1].TrimEnd()
-           $software.Id = $matches[2].TrimEnd()
-           $software.Version = $matches[3].TrimEnd()
-           $software.AvailableVersion = $matches[4].TrimEnd()
+        if ($line -notlike '---*' -and $line.Trim() -ne '' -and $line -match $pattern) {
+            $software = [Software]::new()
+            $software.Name = $matches[1].TrimEnd()
+            $software.Id = $matches[2].TrimEnd()
+            $software.Version = $matches[3].TrimEnd()
+            $software.AvailableVersion = $matches[4].TrimEnd()
            
-           [void]$upgradeList.Add($software)
-       }
-   }
+            if ($DebugMode) {
+                Write-Host "Matched: $($software.Id)" -ForegroundColor Green
+            }
+           
+            [void]$upgradeList.Add($software)
+        } elseif ($DebugMode -and $line.Trim() -ne '' -and $line -notlike '---*') {
+            Write-Host "Not matched: $line" -ForegroundColor Red
+        }
+    }
   
     return $upgradeList
 }
 
-function Invoke-PackageUpgrade
-{
+function Invoke-PackageUpgrade {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)]
@@ -107,10 +109,8 @@ function Invoke-PackageUpgrade
     $upgradeCount = 0
     $skipCount = 0
 
-    foreach ($package in $UpgradeList)
-    {
-        if (-not ($toSkip.packages -contains $package.Id))
-        {
+    foreach ($package in $UpgradeList) {
+        if (-not ($toSkip.packages -contains $package.Id)) {
             $upgradeCount++
             Write-Host "Going to upgrade " -ForegroundColor Blue -NoNewline
             Write-Host "$($package.Id)" -ForegroundColor Green
@@ -125,12 +125,10 @@ Write-Host 'Details:'
             $sb = [scriptblock]::Create($cmd)
             $job = Start-Job -ScriptBlock $sb
             
-            if ($DebugMode)
-            {
+            if ($DebugMode) {
                 Write-Host "Started job for $($package.Id) (Job ID: $($job.Id))" -ForegroundColor Cyan
             }
-        } else
-        {
+        } else {
             $skipCount++
             Write-Host "Skipped the upgrade for " -ForegroundColor Yellow -NoNewline
             Write-Host "$($package.Id)" -ForegroundColor Green
@@ -142,8 +140,7 @@ Write-Host 'Details:'
     # Check if there are any running jobs
     $runningJobs = Get-Job | Where-Object { $_.State -eq 'Running' }
 
-    if ($runningJobs.Count -eq 0)
-    {
+    if ($runningJobs.Count -eq 0) {
         Write-Host 'No packages to upgrade.' -ForegroundColor Yellow
         return
     }
@@ -153,41 +150,32 @@ Write-Host 'Details:'
     $spinnerIndex = 0
     $ProcessingDots = "."
 
-    while ($runningJobs.Count -gt 0)
-    {
+    while ($runningJobs.Count -gt 0) {
         $runningJobs = Get-Job | Where-Object { $_.State -eq 'Running' }
         Write-Host "`rProcessing$ProcessingDots $($spinnerChars[$spinnerIndex])" -NoNewline
         $spinnerIndex = ($spinnerIndex + 1) % $spinnerChars.Count
-        if($spinnerIndex -eq ($spinnerChars.Count - 1))
-        {
+        if($spinnerIndex -eq ($spinnerChars.Count - 1)) {
             $ProcessingDots += "."
         }
         
         $completedJobs = Get-Job -State Completed -HasMoreData $true
         
-        foreach ($job in $completedJobs)
-        {
+        foreach ($job in $completedJobs) {
             $jobOutput = $job | Receive-Job | Where-Object { $_ -notmatch '^\s' -and $_ -ne '' }
             
-            if ($jobOutput.Count -gt 0)
-            {
+            if ($jobOutput.Count -gt 0) {
                 Write-Host "`r                                        " -NoNewline
                 Write-Host "`r"
                 
-                foreach ($line in $jobOutput)
-                {
+                foreach ($line in $jobOutput) {
                     # Color the final status line appropriately
-                    if ($line -eq $jobOutput[-1])
-                    {
-                        if ($line -match 'Successfully installed')
-                        {
+                    if ($line -eq $jobOutput[-1]) {
+                        if ($line -match 'Successfully installed') {
                             Write-Host $line -ForegroundColor Green
-                        } else
-                        {
+                        } else {
                             Write-Host $line -ForegroundColor Red
                         }
-                    } else
-                    {
+                    } else {
                         Write-Host $line
                     }
                 }
@@ -197,8 +185,7 @@ Write-Host 'Details:'
             }
         }
 
-        if ($runningJobs.Count -gt 0)
-        {
+        if ($runningJobs.Count -gt 0) {
             Start-Sleep -Milliseconds 500
         }
     }
@@ -214,33 +201,37 @@ Write-Host 'Details:'
 
 #region Main Script Execution
 
-function Test-WingetAvailability
-{
-    try
-    {
+function Test-WingetAvailability {
+    try {
         $null = & winget --version
         return $true
-    } catch
-    {
+    } catch {
         Write-Error "Windows Package Manager (winget) is not installed or not available in PATH." -ErrorAction Stop
         return $false
     }
 
 }
 
-function Get-AvailableUpgrades
-{
+function Get-AvailableUpgrades {
     [CmdletBinding()]
     param()
     
     Write-Host "Checking for available package upgrades..." -ForegroundColor Cyan
     
-    try
-    {
-        $upgradeResult = & winget upgrade
+    try {
+        # Set a very large buffer width to prevent line wrapping
+        $originalWidth = $Host.UI.RawUI.BufferSize.Width
+        $Host.UI.RawUI.BufferSize = New-Object System.Management.Automation.Host.Size(500, 3000)
+        
+        # Use --disable-interactivity to get full output without truncation
+        $upgradeResult = & winget upgrade --disable-interactivity
+        
+        # Restore original buffer width
+        $currentSize = $Host.UI.RawUI.BufferSize
+        $Host.UI.RawUI.BufferSize = New-Object System.Management.Automation.Host.Size($originalWidth, $currentSize.Height)
+        
         return $upgradeResult.Split([Environment]::NewLine)
-    } catch
-    {
+    } catch {
         Write-Error "Failed to get available upgrades: $_" -ErrorAction Stop
     }
 }
@@ -259,48 +250,65 @@ $hasUpgradeList = $false
 $hasExplicitUpgradeList = $false
 
 # Process winget output
-for ($i = 0; $i -lt $lines.Count; $i++)
-{
+for ($i = 0; $i -lt $lines.Count; $i++) {
     # Find header lines (start with "Name")
-    if ($lines[$i].StartsWith("Name"))
-    {
+    if ($lines[$i].StartsWith("Name")) {
         [void]$headerLines.Add($i)
     }
     
     # Find footer lines (contain "upgrades available.")
-    if ($lines[$i].Contains("upgrades available."))
-    {
+    if ($lines[$i].Contains("upgrades available.")) {
         $hasUpgradeList = $true
         [void]$footerLines.Add($i)
         
         # Process regular upgrade list
         $upgradeList1 = New-UpgradeList -Header $headerLines[0] -Footer $footerLines[0] -ErrorLines $errorLines
         
-        if ($DebugMode)
-        {
+        if ($DebugMode) {
             Write-Host "Standard upgrades available:" -ForegroundColor Cyan
             $upgradeList1 | Format-Table -AutoSize -Wrap
         }
     }
 
     # Process explicit targeting upgrade list
-    if (($footerLines.Count -gt 0) -and $lines[$i].StartsWith("Name") -and ($headerLines.Count -gt 1))
-    {
-        $hasExplicitUpgradeList = $true
-        [void]$footerLines.Add($lines.Count - 1)
+    if (($footerLines.Count -gt 0) -and $lines[$i].StartsWith("The following packages")) {
+        if ($DebugMode) {
+            Write-Host "Found explicit targeting section at line $i" -ForegroundColor Cyan
+        }
         
-        $upgradeList2 = New-UpgradeList -Header $headerLines[1] -Footer $footerLines[1] -ErrorLines $errorLines
-        
-        if ($DebugMode)
-        {
-            Write-Host "Explicit targeting upgrades available:" -ForegroundColor Cyan
-            $upgradeList2 | Format-Table -AutoSize -Wrap
+        # Find the next "Name" header line after this message
+        for ($j = $i + 1; $j -lt $lines.Count; $j++) {
+            if ($lines[$j].StartsWith("Name")) {
+                $hasExplicitUpgradeList = $true
+                [void]$headerLines.Add($j)
+                
+                # Find the end of this section (empty line or end of output)
+                $sectionEnd = $lines.Count - 1
+                for ($k = $j + 1; $k -lt $lines.Count; $k++) {
+                    if ($lines[$k].Trim() -eq '' -and $lines[$k + 1].Trim() -eq '') {
+                        $sectionEnd = $k - 1
+                        break
+                    }
+                }
+                [void]$footerLines.Add($sectionEnd)
+                
+                if ($DebugMode) {
+                    Write-Host "Explicit header at line $j, footer at line $sectionEnd" -ForegroundColor Cyan
+                }
+                
+                $upgradeList2 = New-UpgradeList -Header $headerLines[1] -Footer $footerLines[1] -ErrorLines $errorLines
+                
+                if ($DebugMode) {
+                    Write-Host "Explicit targeting upgrades available:" -ForegroundColor Cyan
+                    $upgradeList2 | Format-Table -AutoSize -Wrap
+                }
+                break
+            }
         }
     }
 
     # Detect error lines
-    if ($lines[$i].Contains("<"))
-    {
+    if ($lines[$i].Contains("<")) {
         Write-Host $lines[$i]
         Write-Host "This line contains an error. It will be automatically removed from the upgrade list." -ForegroundColor Red
         [void]$errorLines.Add($i)
@@ -308,29 +316,37 @@ for ($i = 0; $i -lt $lines.Count; $i++)
 }
 
 # Process available upgrades
-if ($hasUpgradeList)
-{
+if ($hasUpgradeList) {
     $allUpgrades = [System.Collections.ArrayList]::new()
-    [void]$allUpgrades.AddRange($upgradeList1)
     
-    if ($hasExplicitUpgradeList)
-    {
-        if ($upgradeList2 -is [System.Array] -or $upgradeList2 -is [System.Collections.ICollection])
-        {
+    # Safely add upgradeList1
+    if ($upgradeList1) {
+        if ($upgradeList1 -is [System.Array] -or $upgradeList1 -is [System.Collections.ICollection]) {
+            [void]$allUpgrades.AddRange($upgradeList1)
+        } elseif ($upgradeList1 -is [Software]) {
+            [void]$allUpgrades.Add($upgradeList1)
+        }
+    }
+    
+    # Safely add upgradeList2
+    if ($hasExplicitUpgradeList -and $upgradeList2) {
+        if ($upgradeList2 -is [System.Array] -or $upgradeList2 -is [System.Collections.ICollection]) {
             [void]$allUpgrades.AddRange($upgradeList2)
-        } elseif ($upgradeList2 -is [Software])
-        {
-            # If upgradeList2 is a single Software object, use Add instead of AddRange
+        } elseif ($upgradeList2 -is [Software]) {
             [void]$allUpgrades.Add($upgradeList2)
         }
+    }
+    
+    if ($allUpgrades.Count -eq 0) {
+        Write-Host "No valid upgrades found after filtering." -ForegroundColor Yellow
+        return
     }
     
     Write-Host "Found $($allUpgrades.Count) package(s) with available upgrades:`n" -ForegroundColor Green
     $allUpgrades | Format-Table
     
     Invoke-PackageUpgrade -UpgradeList $allUpgrades
-} else
-{
+} else {
     Write-Host "No updates are available. Your system is up to date." -ForegroundColor Green
 }
 
