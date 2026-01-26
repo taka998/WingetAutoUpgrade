@@ -160,6 +160,9 @@ function Invoke-PackageUpgrade {
     $lastDisplayHash = ""
     $displayStartLine = -1
     $displayLineCount = 0
+    
+    # Hide cursor during progress display
+    [Console]::CursorVisible = $false
 
     while ($packageJobs.Count -gt 0) {
         $completedJobs = @()
@@ -212,12 +215,12 @@ function Invoke-PackageUpgrade {
             $packageJobs.Remove($pkgId)
         }
         
-        # Build current state hash to detect changes
+        # Build current state hash to detect changes (include spinner index for animation)
         $stateHash = ""
         foreach ($pkgId in $packageStatus.Keys | Sort-Object) {
             $stateHash += "$pkgId-$($packageStatus[$pkgId].State)|"
         }
-        $stateHash += "$completedCount/$totalJobs"
+        $stateHash += "$completedCount/$totalJobs-$spinnerIndex"
         
         # Only redraw if state changed or first time
         if ($stateHash -ne $lastDisplayHash) {
@@ -295,98 +298,110 @@ function Invoke-PackageUpgrade {
             } else {
                 # Update in place - overwrite existing lines
                 $sortedPackages = $packageStatus.Keys | Sort-Object
-                $expectedLines = 2 + $sortedPackages.Count + 1 + 1 + 1 + 1
-                
-                for ($lineOffset = 0; $lineOffset -lt $expectedLines; $lineOffset++) {
-                    $targetLine = $displayStartLine + $lineOffset
-                    if ($targetLine -lt [Console]::BufferHeight) {
-                        [Console]::SetCursorPosition(0, $targetLine)
-                        Write-Host (" " * [Console]::WindowWidth) -NoNewline
-                        [Console]::SetCursorPosition(0, $targetLine)
-                        
-                        # Redraw based on line offset
-                        if ($lineOffset -eq 0) {
-                            Write-Host ""
-                        } elseif ($lineOffset -eq 1) {
-                            Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Cyan
-                        } elseif ($lineOffset -ge 2 -and $lineOffset -lt (2 + $sortedPackages.Count)) {
-                            # Package status line
-                            $pkgIndex = $lineOffset - 2
-                            if ($pkgIndex -ge 0 -and $pkgIndex -lt $sortedPackages.Count) {
-                                $pkgId = $sortedPackages[$pkgIndex]
-                                if ($pkgId -and $packageStatus.ContainsKey($pkgId)) {
-                                    $status = $packageStatus[$pkgId]
-                                    $icon = $status.Icon
-                                    $state = $status.State
-                                    
-                                    $color = switch -Regex ($state) {
-                                        "Completed" {
-                                            "Green" 
-                                        }
-                                        "Failed" {
-                                            "Red" 
-                                        }
-                                        "Downloading" {
-                                            "Cyan" 
-                                        }
-                                        "Installing" {
-                                            "Yellow" 
-                                        }
-                                        "Finishing" {
-                                            "Magenta" 
-                                        }
-                                        "Queued" {
-                                            "DarkGray" 
-                                        }
-                                        default {
-                                            "White" 
-                                        }
-                                    }
-                                    
-                                    Write-Host "[$icon] " -NoNewline -ForegroundColor $color
-                                    Write-Host "$pkgId " -NoNewline -ForegroundColor White
-                                    Write-Host "($state)" -ForegroundColor $color
-                                } else {
-                                    # Package data not available, write empty line
-                                    Write-Host ""
-                                }
-                            } else {
-                                Write-Host ""
-                            }
-                        } elseif ($lineOffset -eq (2 + $sortedPackages.Count)) {
-                            Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Cyan
-                        } elseif ($lineOffset -eq (3 + $sortedPackages.Count)) {
-                            # Progress bar
-                            $percentage = if ($totalJobs -gt 0) {
-                                [math]::Round(($completedCount / $totalJobs) * 100) 
-                            } else {
-                                0 
-                            }
-                            $barLength = 30
-                            $filled = if ($totalJobs -gt 0) {
-                                [math]::Round($barLength * $completedCount / $totalJobs) 
-                            } else {
-                                0 
-                            }
-                            $bar = "█" * $filled + "░" * ($barLength - $filled)
-                            Write-Host "Upgrading packages... [$bar] $percentage% ($completedCount/$totalJobs)" -ForegroundColor Yellow
-                        } elseif ($lineOffset -eq (4 + $sortedPackages.Count)) {
-                            # Current activity
-                            $currentPackage = $packageJobs.Keys | Select-Object -First 1
-                            if ($currentPackage -and $packageStatus.ContainsKey($currentPackage)) {
-                                $currentStatus = $packageStatus[$currentPackage]
-                                Write-Host "Current: $($currentStatus.State) $currentPackage" -ForegroundColor Magenta
-                            } else {
-                                Write-Host ""
-                            }
-                        } else {
-                            Write-Host ""
-                        }
-                    }
-                }
+                # Calculate expected lines: empty + separator + packages + separator + progress + current (if exists) + empty
+                $hasCurrentActivity = ($packageJobs.Count -gt 0)
+                $expectedLines = 2 + $sortedPackages.Count + 1 + 1 + ($hasCurrentActivity ? 1 : 0) + 1
                 
                 # Update line count
                 $displayLineCount = $expectedLines
+                
+                # Build all display content first
+                $displayContent = @()
+                $displayContent += ""  # Line 0: empty
+                $displayContent += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"  # Line 1: separator
+                
+                # Package lines
+                foreach ($pkgId in $sortedPackages) {
+                    if ($packageStatus.ContainsKey($pkgId)) {
+                        $status = $packageStatus[$pkgId]
+                        $displayContent += "[$($status.Icon)] $pkgId ($($status.State))"
+                    }
+                }
+                
+                $displayContent += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"  # Separator
+                
+                # Progress bar
+                $percentage = if ($totalJobs -gt 0) {
+                    [math]::Round(($completedCount / $totalJobs) * 100) 
+                } else {
+                    0 
+                }
+                $barLength = 30
+                $filled = if ($totalJobs -gt 0) {
+                    [math]::Round($barLength * $completedCount / $totalJobs) 
+                } else {
+                    0 
+                }
+                $bar = "█" * $filled + "░" * ($barLength - $filled)
+                $displayContent += "Upgrading packages... [$bar] $percentage% ($completedCount/$totalJobs)"
+                
+                # Current activity
+                if ($hasCurrentActivity) {
+                    $currentPackage = $packageJobs.Keys | Select-Object -First 1
+                    if ($currentPackage -and $packageStatus.ContainsKey($currentPackage)) {
+                        $currentStatus = $packageStatus[$currentPackage]
+                        $displayContent += "Current: $($currentStatus.State) $currentPackage"
+                    } else {
+                        $displayContent += ""
+                    }
+                }
+                
+                $displayContent += ""  # Final empty line
+                
+                # Now render all lines
+                for ($i = 0; $i -lt $displayContent.Count; $i++) {
+                    $targetLine = $displayStartLine + $i
+                    if ($targetLine -lt [Console]::BufferHeight) {
+                        [Console]::SetCursorPosition(0, $targetLine)
+                        # Clear line
+                        Write-Host (" " * [Console]::WindowWidth) -NoNewline
+                        [Console]::SetCursorPosition(0, $targetLine)
+                        
+                        # Write content with color
+                        $line = $displayContent[$i]
+                        if ($line -match "^\[(.+)\] (.+) \((.+)\)$") {
+                            $icon = $matches[1]
+                            $pkg = $matches[2]
+                            $state = $matches[3]
+                            
+                            $color = switch -Regex ($state) {
+                                "Completed" {
+                                    "Green" 
+                                }
+                                "Failed" {
+                                    "Red" 
+                                }
+                                "Downloading" {
+                                    "Cyan" 
+                                }
+                                "Installing" {
+                                    "Yellow" 
+                                }
+                                "Finishing" {
+                                    "Magenta" 
+                                }
+                                "Queued" {
+                                    "DarkGray" 
+                                }
+                                default {
+                                    "White" 
+                                }
+                            }
+                            
+                            Write-Host "[$icon] " -NoNewline -ForegroundColor $color
+                            Write-Host "$pkg " -NoNewline -ForegroundColor White
+                            Write-Host "($state)" -ForegroundColor $color
+                        } elseif ($line -match "^━") {
+                            Write-Host $line -ForegroundColor Cyan
+                        } elseif ($line -match "^Upgrading") {
+                            Write-Host $line -ForegroundColor Yellow
+                        } elseif ($line -match "^Current:") {
+                            Write-Host $line -ForegroundColor Magenta
+                        } else {
+                            Write-Host $line
+                        }
+                    }
+                }
                 
                 # Move cursor back to end (with boundary check)
                 $targetPosition = $displayStartLine + $displayLineCount
@@ -395,7 +410,7 @@ function Invoke-PackageUpgrade {
                 }
             }
         } else {
-            # Just update spinner for running jobs (minimal update)
+            # Just update spinner for running jobs
             $spinnerIndex = ($spinnerIndex + 1) % $spinnerChars.Count
             foreach ($pkgId in $packageJobs.Keys) {
                 if ($packageStatus.ContainsKey($pkgId)) {
@@ -408,9 +423,12 @@ function Invoke-PackageUpgrade {
         }
 
         if ($packageJobs.Count -gt 0) {
-            Start-Sleep -Milliseconds 300
+            Start-Sleep -Milliseconds 5
         }
     }
+    
+    # Show cursor again
+    [Console]::CursorVisible = $true
     
     # Move cursor to after the display area (with boundary check)
     if ($displayStartLine -ne -1) {
