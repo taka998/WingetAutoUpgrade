@@ -3,7 +3,6 @@
         "Unity.Unity.6000",
         "SlackTechnologies.Slack",
         "Microsoft.Office",
-        "Discord.Discord",
         "Google.PlayGames.Beta"
     ]
 }
