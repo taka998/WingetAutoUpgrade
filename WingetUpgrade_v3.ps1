@@ -286,11 +286,31 @@ function Invoke-PackageUpgrade {
             
                 Write-Host "Upgrading packages... [$bar] $percentage% ($completedCount/$totalJobs)" -ForegroundColor Yellow
             
-                # Current activity
-                $currentPackage = $packageJobs.Keys | Select-Object -First 1
-                if ($currentPackage -and $packageStatus.ContainsKey($currentPackage)) {
-                    $currentStatus = $packageStatus[$currentPackage]
-                    Write-Host "Current: $($currentStatus.State) $currentPackage" -ForegroundColor Magenta
+                # Status summary
+                if ($packageJobs.Count -gt 0) {
+                    # Count packages by state
+                    $stateCounts = @{}
+                    foreach ($pkgId in $packageStatus.Keys) {
+                        $state = $packageStatus[$pkgId].State
+                        if ($stateCounts.ContainsKey($state)) {
+                            $stateCounts[$state]++
+                        } else {
+                            $stateCounts[$state] = 1
+                        }
+                    }
+                    
+                    # Build status summary
+                    $statusParts = @()
+                    $order = @("Downloading", "Installing", "Processing", "Completed", "Failed", "Queued")
+                    foreach ($state in $order) {
+                        if ($stateCounts.ContainsKey($state) -and $stateCounts[$state] -gt 0) {
+                            $statusParts += "$state $($stateCounts[$state])"
+                        }
+                    }
+                    
+                    if ($statusParts.Count -gt 0) {
+                        Write-Host ("Status: " + ($statusParts -join ", ")) -ForegroundColor Magenta
+                    }
                 }
                 Write-Host ""
             
@@ -335,12 +355,30 @@ function Invoke-PackageUpgrade {
                 $bar = "█" * $filled + "░" * ($barLength - $filled)
                 $displayContent += "Upgrading packages... [$bar] $percentage% ($completedCount/$totalJobs)"
                 
-                # Current activity
+                # Current activity - show status summary
                 if ($hasCurrentActivity) {
-                    $currentPackage = $packageJobs.Keys | Select-Object -First 1
-                    if ($currentPackage -and $packageStatus.ContainsKey($currentPackage)) {
-                        $currentStatus = $packageStatus[$currentPackage]
-                        $displayContent += "Current: $($currentStatus.State) $currentPackage"
+                    # Count packages by state
+                    $stateCounts = @{}
+                    foreach ($pkgId in $packageStatus.Keys) {
+                        $state = $packageStatus[$pkgId].State
+                        if ($stateCounts.ContainsKey($state)) {
+                            $stateCounts[$state]++
+                        } else {
+                            $stateCounts[$state] = 1
+                        }
+                    }
+                    
+                    # Build status summary
+                    $statusParts = @()
+                    $order = @("Downloading", "Installing", "Processing", "Completed", "Failed", "Queued")
+                    foreach ($state in $order) {
+                        if ($stateCounts.ContainsKey($state) -and $stateCounts[$state] -gt 0) {
+                            $statusParts += "$state $($stateCounts[$state])"
+                        }
+                    }
+                    
+                    if ($statusParts.Count -gt 0) {
+                        $displayContent += "Status: " + ($statusParts -join ", ")
                     } else {
                         $displayContent += ""
                     }
@@ -395,7 +433,7 @@ function Invoke-PackageUpgrade {
                             Write-Host $line -ForegroundColor Cyan
                         } elseif ($line -match "^Upgrading") {
                             Write-Host $line -ForegroundColor Yellow
-                        } elseif ($line -match "^Current:") {
+                        } elseif ($line -match "^Status:") {
                             Write-Host $line -ForegroundColor Magenta
                         } else {
                             Write-Host $line
