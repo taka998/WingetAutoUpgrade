@@ -595,6 +595,10 @@ function Invoke-PackageUpgrade {
     $skipCount = $filterResult.SkipCount
     $packageJobs = @{}
 
+    if ($DebugMode -and $skipCount -gt 0) {
+        Write-Host "Skipped $skipCount package(s) based on skip list" -ForegroundColor DarkGray
+    }
+
     if ($upgradeCount -eq 0) {
         Write-Host 'No packages to upgrade.' -ForegroundColor Yellow
         return
