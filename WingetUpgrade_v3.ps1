@@ -114,8 +114,15 @@ function Invoke-PackageUpgrade {
                 $scriptBlock = {
                     param($PackageId)
                     
+                    # Suppress all output streams
+                    $ProgressPreference = 'SilentlyContinue'
+                    $VerbosePreference = 'SilentlyContinue'
+                    $DebugPreference = 'SilentlyContinue'
+                    $WarningPreference = 'SilentlyContinue'
+                    $InformationPreference = 'SilentlyContinue'
+                    
                     # Import module in thread context
-                    Import-Module Microsoft.WinGet.Client -ErrorAction Stop
+                    Import-Module Microsoft.WinGet.Client -ErrorAction Stop | Out-Null
                     
                     # Re-get the package in the thread context
                     $pkg = Get-WinGetPackage -Id $PackageId | Where-Object { $_.IsUpdateAvailable -eq $true } | Select-Object -First 1
@@ -123,11 +130,14 @@ function Invoke-PackageUpgrade {
                     if ($pkg) {
                         Write-Output "STATUS:Downloading:$PackageId"
                         
-                        # Perform the update
-                        $result = Update-WinGetPackage -InputObject $pkg -Mode Silent -Force
-                        
-                        Write-Output "STATUS:Completed:$PackageId"
-                        return $result
+                        # Perform the update with all output suppressed
+                        try {
+                            Update-WinGetPackage -InputObject $pkg -Mode Silent -Force *>&1 | Out-Null
+                            Write-Output "STATUS:Completed:$PackageId"
+                        } catch {
+                            Write-Output "STATUS:Failed:$PackageId"
+                            throw
+                        }
                     } else {
                         Write-Output "STATUS:Failed:$PackageId"
                         throw "Package $PackageId not found or not updateable"
