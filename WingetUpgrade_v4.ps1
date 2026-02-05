@@ -305,6 +305,9 @@ function Get-StateColor {
         "Failed" {
             return "Red" 
         }
+        "Cancelled" {
+            return "DarkYellow" 
+        }
         "Downloading" {
             return "Cyan" 
         }
@@ -634,88 +637,123 @@ function Invoke-PackageUpgrade {
     # Hide cursor during progress display
     [Console]::CursorVisible = $false
 
-    while ($packageJobs.Count -gt 0) {
-        # Update status for each package
-        $updateResult = Update-PackageJobStatus `
-            -PackageStatus $packageStatus `
-            -PackageJobs $packageJobs `
-            -SpinnerChars $spinnerChars `
-            -SpinnerIndex $spinnerIndex
-        
-        $completedJobs = $updateResult.CompletedJobs
-        
-        # Remove completed jobs
-        foreach ($pkgId in $completedJobs) {
-            $packageJobs.Remove($pkgId)
-        }
-        
-        # Calculate actual completed count from package status
-        $completedCount = 0
-        foreach ($pkgId in $packageStatus.Keys) {
-            if ($packageStatus[$pkgId].State -eq "Completed" -or $packageStatus[$pkgId].State -eq "Failed") {
-                $completedCount++
-            }
-        }
-        
-        # Build current state hash to detect changes (include spinner index for animation)
-        $stateHash = ""
-        foreach ($pkgId in $packageStatus.Keys | Sort-Object) {
-            $stateHash += "$pkgId-$($packageStatus[$pkgId].State)|"
-        }
-        $stateHash += "$completedCount/$totalJobs-$spinnerIndex"
-        
-        # Only redraw if state changed or first time
-        if ($stateHash -ne $lastDisplayHash) {
-            $lastDisplayHash = $stateHash
-            
-            if ($displayStartLine -eq -1) {
-                # First time - record start position without drawing
-                # This prevents double rendering on initial display
-                $displayStartLine = [Console]::CursorTop
-            }
-            
-            # Use Update-ProgressDisplay for all rendering (first time and updates)
-            # This ensures consistent display position throughout execution
-            $hasCurrentActivity = ($packageJobs.Count -gt 0)
-            
-            $displayLineCount = Update-ProgressDisplay `
+    try {
+        while ($packageJobs.Count -gt 0) {
+            # Update status for each package
+            $updateResult = Update-PackageJobStatus `
                 -PackageStatus $packageStatus `
-                -TotalJobs $totalJobs `
-                -CompletedCount $completedCount `
-                -DisplayStartLine $displayStartLine `
-                -HasCurrentActivity $hasCurrentActivity
+                -PackageJobs $packageJobs `
+                -SpinnerChars $spinnerChars `
+                -SpinnerIndex $spinnerIndex
             
-            # Move cursor back to end (with boundary check)
+            $completedJobs = $updateResult.CompletedJobs
+            
+            # Remove completed jobs
+            foreach ($pkgId in $completedJobs) {
+                $packageJobs.Remove($pkgId)
+            }
+            
+            # Calculate actual completed count from package status
+            $completedCount = 0
+            foreach ($pkgId in $packageStatus.Keys) {
+                if ($packageStatus[$pkgId].State -eq "Completed" -or $packageStatus[$pkgId].State -eq "Failed") {
+                    $completedCount++
+                }
+            }
+            
+            # Build current state hash to detect changes (include spinner index for animation)
+            $stateHash = ""
+            foreach ($pkgId in $packageStatus.Keys | Sort-Object) {
+                $stateHash += "$pkgId-$($packageStatus[$pkgId].State)|"
+            }
+            $stateHash += "$completedCount/$totalJobs-$spinnerIndex"
+            
+            # Only redraw if state changed or first time
+            if ($stateHash -ne $lastDisplayHash) {
+                $lastDisplayHash = $stateHash
+                
+                if ($displayStartLine -eq -1) {
+                    # First time - record start position without drawing
+                    # This prevents double rendering on initial display
+                    $displayStartLine = [Console]::CursorTop
+                }
+                
+                # Use Update-ProgressDisplay for all rendering (first time and updates)
+                # This ensures consistent display position throughout execution
+                $hasCurrentActivity = ($packageJobs.Count -gt 0)
+                
+                $displayLineCount = Update-ProgressDisplay `
+                    -PackageStatus $packageStatus `
+                    -TotalJobs $totalJobs `
+                    -CompletedCount $completedCount `
+                    -DisplayStartLine $displayStartLine `
+                    -HasCurrentActivity $hasCurrentActivity
+                
+                # Move cursor back to end (with boundary check)
+                $targetPosition = $displayStartLine + $displayLineCount
+                if ($targetPosition -lt [Console]::BufferHeight) {
+                    [Console]::SetCursorPosition(0, $targetPosition)
+                }
+            } else {
+                # Just update spinner for running jobs
+                $spinnerIndex = ($spinnerIndex + 1) % $spinnerChars.Count
+                foreach ($pkgId in $packageJobs.Keys) {
+                    if ($packageStatus.ContainsKey($pkgId)) {
+                        $state = $packageStatus[$pkgId].State
+                        if ($state -eq "Downloading" -or $state -eq "Installing" -or $state -eq "Processing") {
+                            $packageStatus[$pkgId].Icon = $spinnerChars[$spinnerIndex]
+                        }
+                    }
+                }
+            }
+
+            if ($packageJobs.Count -gt 0) {
+                Start-Sleep -Milliseconds 5
+            }
+        }
+    } catch {
+        # Handle interruption (Ctrl+C) or other errors
+        Write-Host "`n`n⚠️  Upgrade process interrupted" -ForegroundColor Yellow
+        
+        if ($_.Exception.Message -match "pipeline.*stopped|terminated") {
+            Write-Host "Cleaning up running jobs..." -ForegroundColor Gray
+        } else {
+            Write-Host "Error occurred: $($_.Exception.Message)" -ForegroundColor Red
+        }
+    } finally {
+        # Cleanup: Stop all remaining jobs
+        if ($packageJobs.Count -gt 0) {
+            Write-Host "Stopping $($packageJobs.Count) running job(s)..." -ForegroundColor Gray
+            
+            foreach ($pkgId in $packageJobs.Keys) {
+                $job = $packageJobs[$pkgId]
+                try {
+                    Stop-Job -Job $job -ErrorAction SilentlyContinue
+                    Remove-Job -Job $job -Force -ErrorAction SilentlyContinue
+                    
+                    # Update status for cancelled jobs
+                    if ($packageStatus.ContainsKey($pkgId)) {
+                        $packageStatus[$pkgId].State = "Cancelled"
+                        $packageStatus[$pkgId].Icon = "⊗"
+                        $packageStatus[$pkgId].ErrorMessage = "Interrupted by user"
+                    }
+                } catch {
+                    # Ignore cleanup errors
+                }
+            }
+            
+            Write-Host "All jobs stopped." -ForegroundColor Green
+        }
+        
+        # Always restore cursor visibility
+        [Console]::CursorVisible = $true
+        
+        # Move cursor to after the display area (with boundary check)
+        if ($displayStartLine -ne -1) {
             $targetPosition = $displayStartLine + $displayLineCount
             if ($targetPosition -lt [Console]::BufferHeight) {
                 [Console]::SetCursorPosition(0, $targetPosition)
             }
-        } else {
-            # Just update spinner for running jobs
-            $spinnerIndex = ($spinnerIndex + 1) % $spinnerChars.Count
-            foreach ($pkgId in $packageJobs.Keys) {
-                if ($packageStatus.ContainsKey($pkgId)) {
-                    $state = $packageStatus[$pkgId].State
-                    if ($state -eq "Downloading" -or $state -eq "Installing" -or $state -eq "Processing") {
-                        $packageStatus[$pkgId].Icon = $spinnerChars[$spinnerIndex]
-                    }
-                }
-            }
-        }
-
-        if ($packageJobs.Count -gt 0) {
-            Start-Sleep -Milliseconds 5
-        }
-    }
-    
-    # Show cursor again
-    [Console]::CursorVisible = $true
-    
-    # Move cursor to after the display area (with boundary check)
-    if ($displayStartLine -ne -1) {
-        $targetPosition = $displayStartLine + $displayLineCount
-        if ($targetPosition -lt [Console]::BufferHeight) {
-            [Console]::SetCursorPosition(0, $targetPosition)
         }
     }
     
