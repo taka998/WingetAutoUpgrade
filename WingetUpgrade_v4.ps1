@@ -241,7 +241,7 @@ function Update-PackageJobStatus {
                 # Extract error information
                 if ($errorMessages) {
                     foreach ($errMsg in $errorMessages) {
-                        if ($errMsg -match "^ERROR:$([regex]::Escape(${pkgId})):(.*)") {
+                        if ($errMsg -match "^ERROR:$([regex]::Escape($pkgId)):(.*)" ) {
                             $PackageStatus[$pkgId].ErrorMessage = $matches[1]
                         }
                     }
@@ -249,7 +249,7 @@ function Update-PackageJobStatus {
                 
                 if ($errorDetails) {
                     foreach ($errDetail in $errorDetails) {
-                        if ($errDetail -match "^ERRORDETAIL:$([regex]::Escape(${pkgId})):(.*)") {
+                        if ($errDetail -match "^ERRORDETAIL:$([regex]::Escape($pkgId)):(.*)" ) {
                             $PackageStatus[$pkgId].ErrorDetails = $matches[1]
                         }
                     }
@@ -380,7 +380,7 @@ function Get-StatusSummary {
     
     # Build status summary
     $statusParts = @()
-    $order = @("Downloading", "Installing", "Processing", "Completed", "Failed", "Queued")
+    $order = @("Downloading", "Installing", "Processing", "Completed", "Failed", "Cancelled", "Queued")
     foreach ($state in $order) {
         if ($stateCounts.ContainsKey($state) -and $stateCounts[$state] -gt 0) {
             $statusParts += "$state $($stateCounts[$state])"
@@ -535,13 +535,18 @@ function Show-UpgradeSummary {
     
     $successCount = 0
     $failCount = 0
+    $cancelCount = 0
     $failedPackages = @()
+    $cancelledPackages = @()
     
     foreach ($pkgId in $PackageStatus.Keys | Sort-Object) {
         $status = $PackageStatus[$pkgId]
         
         if ($status.State -eq "Completed") {
             $successCount++
+        } elseif ($status.State -eq "Cancelled") {
+            $cancelCount++
+            $cancelledPackages += $pkgId
         } else {
             $failCount++
             $failedPackages += @{
@@ -555,10 +560,17 @@ function Show-UpgradeSummary {
     Write-Host "  ✅ $successCount succeeded" -NoNewline -ForegroundColor Green
     if ($failCount -gt 0) {
         Write-Host ", " -NoNewline
-        Write-Host "❌ $failCount failed" -ForegroundColor Red
-    } else {
-        Write-Host ""
+        Write-Host "❌ $failCount failed" -NoNewline -ForegroundColor Red
     }
+    if ($cancelCount -gt 0) {
+        if ($failCount -gt 0) {
+            Write-Host ", " -NoNewline
+        } else {
+            Write-Host ", " -NoNewline
+        }
+        Write-Host "⊗ $cancelCount cancelled" -NoNewline -ForegroundColor DarkYellow
+    }
+    Write-Host ""
     
     # Show detailed error information for failed packages
     if ($failedPackages.Count -gt 0) {
@@ -572,6 +584,15 @@ function Show-UpgradeSummary {
             if ($failedPkg.ErrorDetails) {
                 Write-Host "    Details: $($failedPkg.ErrorDetails)" -ForegroundColor DarkGray
             }
+        }
+    }
+    
+    # Show cancelled packages
+    if ($cancelledPackages.Count -gt 0) {
+        Write-Host ""
+        Write-Host "⊗ Cancelled Packages:" -ForegroundColor DarkYellow
+        foreach ($cancelledPkg in $cancelledPackages) {
+            Write-Host "  • $cancelledPkg" -ForegroundColor DarkYellow
         }
     }
     
